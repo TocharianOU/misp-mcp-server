@@ -1,0 +1,58 @@
+{
+  "name": "@tocharian/misp-mcp-server",
+  "description": "MISP Threat Intelligence Platform MCP Server",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "author": "TocharianOU",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "bin": {
+    "mcp-server-misp": "./dist/index.js"
+  },
+  "repository": "https://github.com/TocharianOU/misp-mcp-server",
+  "bugs": "https://github.com/TocharianOU/misp-mcp-server/issues",
+  "homepage": "https://github.com/TocharianOU/misp-mcp-server",
+  "keywords": [
+    "misp",
+    "mcp",
+    "mcp-server",
+    "threat-intelligence",
+    "model-context-protocol"
+  ],
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "openapi.yaml"
+  ],
+  "scripts": {
+    "build": "tsc && shx chmod +x dist/index.js && npm run copy-yaml",
+    "copy-yaml": "shx cp ./openapi.yaml dist/ && shx cp ./openapi.yaml dist/src/",
+    "prepare": "npm run build",
+    "watch": "tsc --watch",
+    "start": "node dist/index.js",
+    "start:ts": "NODE_OPTIONS=\"--loader ts-node/esm\" node index.ts",
+    "inspector": "npx @modelcontextprotocol/inspector node dist/index.js",
+    "inspector:ts": "NODE_OPTIONS=\"--loader ts-node/esm\" npx @modelcontextprotocol/inspector node index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.8.0",
+    "axios": "^1.8.4",
+    "js-yaml": "^4.1.0",
+    "ts-node": "^10.9.2",
+    "zod": "^3.24.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "22.13.15",
+    "shx": "0.4.0",
+    "typescript": "^5.8.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
