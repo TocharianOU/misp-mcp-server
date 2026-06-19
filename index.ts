@@ -4,6 +4,9 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { randomUUID } from "crypto";
+import http from "http";
 import axios, { AxiosError } from "axios";
 import https from "https";
 import {
@@ -68,7 +71,6 @@ export async function createMispMcpServer(options: ServerCreationOptions): Promi
   const server = new McpServer({
     name,
     version,
-    capabilities: { tools: {}, prompts: { listChanged: false }, resources: {} },
     description,
   });
 
@@ -102,6 +104,56 @@ export async function createMispMcpServer(options: ServerCreationOptions): Promi
   return server;
 }
 
+async function startStreamableHttp(server: McpServer, port: number) {
+  // session map for stateful connections
+  const sessions = new Map<string, StreamableHTTPServerTransport>();
+
+  const httpServer = http.createServer(async (req, res) => {
+    if (req.method === "POST" && req.url === "/mcp") {
+      let sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+      let transport: StreamableHTTPServerTransport;
+      if (sessionId && sessions.has(sessionId)) {
+        transport = sessions.get(sessionId)!;
+      } else {
+        sessionId = randomUUID();
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => sessionId!,
+          onsessioninitialized: (id) => {
+            sessions.set(id, transport);
+          },
+        });
+        transport.onclose = () => sessions.delete(sessionId!);
+        await server.connect(transport);
+      }
+
+      await transport.handleRequest(req, res);
+      return;
+    }
+
+    if ((req.method === "GET" || req.method === "DELETE") && req.url?.startsWith("/mcp")) {
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      if (!sessionId || !sessions.has(sessionId)) {
+        res.writeHead(404).end(JSON.stringify({ error: "Session not found" }));
+        return;
+      }
+      await sessions.get(sessionId)!.handleRequest(req, res);
+      return;
+    }
+
+    res.writeHead(404).end();
+  });
+
+  httpServer.listen(port, () => {
+    process.stderr.write(`MISP MCP Server (StreamableHTTP) listening on http://0.0.0.0:${port}/mcp\n`);
+  });
+
+  process.on("SIGINT", async () => {
+    httpServer.close();
+    process.exit(0);
+  });
+}
+
 async function main() {
   const config: MispConfig = {
     url: process.env.MISP_URL || "https://localhost",
@@ -110,7 +162,10 @@ async function main() {
     timeout: parseInt(process.env.MISP_TIMEOUT || "30000", 10),
   };
 
-  process.stderr.write(`Starting MISP MCP Server → ${config.url}\n`);
+  const transport = process.env.TRANSPORT || "stdio";
+  const port = parseInt(process.env.PORT || "3000", 10);
+
+  process.stderr.write(`Starting MISP MCP Server → ${config.url} [transport: ${transport}]\n`);
 
   const server = await createMispMcpServer({
     name: "misp-mcp-server",
@@ -119,13 +174,19 @@ async function main() {
     description: "MISP Threat Intelligence Platform MCP Server",
   });
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-
-  process.on("SIGINT", async () => {
-    await server.close();
-    process.exit(0);
-  });
+  if (transport === "http" || transport === "streamable-http") {
+    await startStreamableHttp(server, port);
+  } else {
+    const stdioTransport = new StdioServerTransport();
+    await server.connect(stdioTransport);
+    process.on("SIGINT", async () => {
+      await server.close();
+      process.exit(0);
+    });
+  }
 }
 
-main().catch(() => process.exit(1));
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
