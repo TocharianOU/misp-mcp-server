@@ -6,7 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { randomUUID } from "crypto";
-import http from "http";
+import express, { Request, Response } from "express";
 import axios, { AxiosError } from "axios";
 import https from "https";
 import {
@@ -105,51 +105,45 @@ export async function createMispMcpServer(options: ServerCreationOptions): Promi
 }
 
 async function startStreamableHttp(server: McpServer, port: number) {
-  // session map for stateful connections
   const sessions = new Map<string, StreamableHTTPServerTransport>();
 
-  const httpServer = http.createServer(async (req, res) => {
-    if (req.method === "POST" && req.url === "/mcp") {
-      let sessionId = req.headers["mcp-session-id"] as string | undefined;
+  const app = express();
+  app.use(express.json());
 
-      let transport: StreamableHTTPServerTransport;
-      if (sessionId && sessions.has(sessionId)) {
-        transport = sessions.get(sessionId)!;
-      } else {
-        sessionId = randomUUID();
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => sessionId!,
-          onsessioninitialized: (id) => {
-            sessions.set(id, transport);
-          },
-        });
-        transport.onclose = () => sessions.delete(sessionId!);
-        await server.connect(transport);
-      }
+  const handleMcp = async (req: Request, res: Response) => {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
-      await transport.handleRequest(req, res);
-      return;
+    let transport: StreamableHTTPServerTransport;
+    if (sessionId && sessions.has(sessionId)) {
+      transport = sessions.get(sessionId)!;
+    } else {
+      const newId = randomUUID();
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => newId,
+        onsessioninitialized: (id) => {
+          sessions.set(id, transport);
+        },
+      });
+      transport.onclose = () => sessions.delete(newId);
+      await server.connect(transport);
     }
 
-    if ((req.method === "GET" || req.method === "DELETE") && req.url?.startsWith("/mcp")) {
-      const sessionId = req.headers["mcp-session-id"] as string | undefined;
-      if (!sessionId || !sessions.has(sessionId)) {
-        res.writeHead(404).end(JSON.stringify({ error: "Session not found" }));
-        return;
-      }
-      await sessions.get(sessionId)!.handleRequest(req, res);
-      return;
-    }
+    await transport.handleRequest(req, res, req.body);
+  };
 
-    res.writeHead(404).end();
+  app.post("/mcp", handleMcp);
+  app.get("/mcp", handleMcp);
+  app.delete("/mcp", handleMcp);
+
+  app.get("/health", (_req, res) => {
+    res.json({ status: "ok", transport: "streamable-http" });
   });
 
-  httpServer.listen(port, () => {
+  app.listen(port, () => {
     process.stderr.write(`MISP MCP Server (StreamableHTTP) listening on http://0.0.0.0:${port}/mcp\n`);
   });
 
   process.on("SIGINT", async () => {
-    httpServer.close();
     process.exit(0);
   });
 }
